@@ -52,6 +52,13 @@ async def main() -> None:
         cfg.api_id,
         cfg.api_hash,
         sequential_updates=True,   # Important: prevents out-of-order updates
+        # Telethon's default (5 retries, then give up permanently) means a
+        # network blip outlasting a few seconds leaves every future request
+        # raising "Cannot send requests while disconnected" forever. Retry
+        # the underlying connection indefinitely instead — our own retry
+        # loops already handle backoff for the higher-level operations.
+        connection_retries=None,
+        retry_delay=5,
     )
 
     # ------------------------------------------------------------------
