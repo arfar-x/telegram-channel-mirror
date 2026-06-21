@@ -1,0 +1,15 @@
+services:
+  mirror:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DB_PATH=/data/mirror.db
+    volumes:
+      - mirror_db:/data
+    stdin_open: true
+    tty: true
+
+volumes:
+  mirror_db:

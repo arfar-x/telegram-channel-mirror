@@ -11,13 +11,14 @@ deleted_messages  : source_ids marked as deleted (soft delete)
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path("mirror.db")
+DB_PATH = Path(os.environ.get("DB_PATH", "mirror.db"))
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
