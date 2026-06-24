@@ -16,4 +16,4 @@ COPY utils ./utils
 COPY scripts ./scripts
 COPY main.py .
 
-ENTRYPOINT ["python", "/app/main.py"]
+ENTRYPOINT ["uv", "run", "main.py"]

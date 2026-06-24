@@ -121,6 +121,28 @@ async def main() -> None:
         me = await client.get_me()
         logger.info("Logged in as: %s (id=%d)", me.username or me.first_name, me.id)
 
+        # Guard against the disaster case: a lost/recreated database has no
+        # historical_min_id, which would make HistoricalSync.run() re-mirror
+        # the entire source channel from scratch — duplicating everything
+        # already sitting in the destination if it isn't actually empty.
+        # A genuine first-time deployment has an empty destination, so that
+        # case is left to run the normal full backfill below.
+        if await db.get_progress("historical_min_id") is None:
+            dest_preview = await client.get_messages(cfg.destination_channel, limit=1)
+            if dest_preview:
+                logger.error(
+                    "historical_min_id is unset but the destination channel "
+                    "already has messages — this looks like a recovery "
+                    "scenario (database lost after messages were already "
+                    "mirrored), not a fresh deployment. Refusing to run "
+                    "historical sync, which would re-mirror and duplicate "
+                    "everything. Run "
+                    "`python scripts/recover_message_map.py --bootstrap-cursor` "
+                    "first, then restart."
+                )
+                await db.close()
+                sys.exit(1)
+
         # Register live handlers BEFORE historical sync so no events are missed
         # during the sync window. Events are buffered in the asyncio.Queue.
         dispatcher.register()

@@ -117,6 +117,10 @@ class Database:
             "SELECT * FROM message_map WHERE source_id = $1", source_id
         )
 
+    async def has_mappings(self) -> bool:
+        row = await self._pool.fetchrow("SELECT 1 FROM message_map LIMIT 1")
+        return row is not None
+
     async def get_group_dest_ids(self, grouped_id: int) -> list[int]:
         """Return all destination message ids belonging to an album group."""
         rows = await self._pool.fetch(
