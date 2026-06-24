@@ -17,9 +17,7 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/mirror"
-)
+DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/mirror"
 
 # Telegram message ids fit comfortably in INTEGER, but grouped_id and channel
 # ids can exceed it — BIGINT everywhere avoids silent truncation/overflow.
@@ -51,8 +49,8 @@ CREATE TABLE IF NOT EXISTS pending_edits (
 class Database:
     """Thin async wrapper around an asyncpg connection pool."""
 
-    def __init__(self, dsn: str = DATABASE_URL) -> None:
-        self._dsn = dsn
+    def __init__(self, dsn: str | None = None) -> None:
+        self._dsn = dsn or os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
         self._pool: asyncpg.Pool | None = None
 
     # ------------------------------------------------------------------

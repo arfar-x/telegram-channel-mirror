@@ -23,8 +23,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import asyncpg
+from dotenv import load_dotenv
 
-from db.database import DATABASE_URL, SCHEMA
+load_dotenv()
+
+from db.database import DEFAULT_DATABASE_URL, SCHEMA
+
+DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
 
 TABLES = ("message_map", "sync_progress", "pending_edits")
 
