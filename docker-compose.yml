@@ -1,15 +1,27 @@
 services:
-  mirror:
-    build: .
-    restart: unless-stopped
+  postgres:
+    image: postgres:16-alpine
+    restart: always
     env_file:
       - .env
-    environment:
-      - DB_PATH=/data/mirror.db
     volumes:
-      - mirror_db:/data
+      - mirror_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mirror:
+    build: .
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
     stdin_open: true
     tty: true
 
 volumes:
-  mirror_db:
+  mirror_pgdata:

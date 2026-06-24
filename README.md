@@ -22,7 +22,7 @@ Mirrors everything from a source channel into a destination channel **without us
 | Historical sync (oldest → newest, resumable) | ✅ |
 | Duplicate detection | ✅ |
 | FloodWait + retry | ✅ |
-| SQLite state persistence | ✅ |
+| PostgreSQL state persistence | ✅ |
 | Graceful shutdown | ✅ |
 | Channel title / photo changes | ⚠️ Logged only (see LIMITATIONS.md) |
 | Quiz correct answers | ⚠️ Not mirrored (API restriction) |
@@ -40,7 +40,7 @@ tg_mirror/
 ├── LIMITATIONS.md
 ├── db/
 │   ├── __init__.py
-│   └── database.py          # Async SQLite wrapper
+│   └── database.py          # Async PostgreSQL wrapper (asyncpg)
 ├── handlers/
 │   ├── __init__.py
 │   ├── sender.py            # MessageSender — re-creates all content types
@@ -99,10 +99,25 @@ SESSION_NAME=mirror_bot
 SOURCE_CHANNEL=-1001234567890
 DESTINATION_CHANNEL=-1009876543210
 
+# PostgreSQL connection string
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/mirror
+
 # Optional
 ENABLE_DELETE_SYNC=false
 LOG_LEVEL=INFO
 ```
+
+You need a running PostgreSQL instance. The included `docker-compose.yml` starts one for you, or point `DATABASE_URL` at any existing server. The app creates its tables automatically on first connect.
+
+#### Migrating from a previous SQLite install
+
+If you're upgrading from a version that used SQLite (`mirror.db`), copy your existing data into PostgreSQL before starting the new version:
+
+```bash
+python scripts/migrate_sqlite_to_postgres.py --sqlite-path mirror.db
+```
+
+This reads every row out of the SQLite file and upserts it into the PostgreSQL database pointed to by `DATABASE_URL`, then verifies row counts match. The SQLite file itself is never modified or deleted — keep it around until you've confirmed the app runs correctly against PostgreSQL.
 
 #### Finding numeric channel IDs
 
@@ -162,7 +177,7 @@ main.py
   │
   ├─ TelegramClient (Telethon, sequential_updates=True)
   │
-  ├─ Database (SQLite via aiosqlite)
+  ├─ Database (PostgreSQL via asyncpg)
   │    ├─ message_map       source_id → dest_id + metadata
   │    ├─ sync_progress     historical sync cursor
   │    └─ pending_edits     edits that arrived before original was processed
