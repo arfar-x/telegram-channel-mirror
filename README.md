@@ -143,29 +143,15 @@ Telethon will prompt for your phone number and an OTP code (and 2FA password if 
 
 ### 6. Running as a service (systemd)
 
-```ini
-# /etc/systemd/system/tg-mirror.service
-[Unit]
-Description=Telegram Channel Mirror
-After=network.target
+This repo ships a unit file at [systemd/telegram-channel-mirror.service](systemd/telegram-channel-mirror.service). It expects the *interactive* first run (step 5 above, which creates `<SESSION_NAME>.session`) to already have happened — `systemd` has no terminal to answer the OTP/2FA prompts, so do that login before enabling the service. It also assumes `DATABASE_URL` points at a PostgreSQL instance that's already reachable (run `docker compose up -d postgres`, or your own Postgres) — `systemd` here only manages the Python daemon, not Postgres.
 
-[Service]
-Type=simple
-User=youruser
-WorkingDirectory=/opt/tg_mirror
-EnvironmentFile=/opt/tg_mirror/.env
-ExecStart=/opt/tg_mirror/.venv/bin/python main.py
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
+Edit `User=`, `WorkingDirectory=`, and the `.venv` path in the unit to match your deployment, then install it:
 
 ```bash
+sudo cp systemd/telegram-channel-mirror.service /etc/systemd/system/telegram-channel-mirror.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now tg-mirror
-sudo journalctl -u tg-mirror -f
+sudo systemctl enable --now telegram-channel-mirror
+sudo journalctl -u telegram-channel-mirror -f
 ```
 
 ---

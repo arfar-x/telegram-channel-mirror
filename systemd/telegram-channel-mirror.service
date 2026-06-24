@@ -1,0 +1,16 @@
+[Unit]
+Description=Telegram Channel Mirror
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/opt/telegram-channel-mirror
+EnvironmentFile=/opt/telegram-channel-mirror/.env
+ExecStart=/opt/telegram-channel-mirror/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
