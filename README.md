@@ -154,6 +154,31 @@ sudo systemctl enable --now telegram-channel-mirror
 sudo journalctl -u telegram-channel-mirror -f
 ```
 
+### 7. Running with Docker
+
+`docker compose up -d` runs the `mirror` service detached, with no terminal attached — so it can't answer the interactive phone/OTP/2FA prompts from step 5. The `mirror` service mounts `./session_data` to `/app/session_data` and sets `SESSION_NAME=session_data/mirror_bot`, so the session file persists on the host across container restarts/rebuilds (without this volume, a session created inside the container would be lost the next time the container is recreated).
+
+Do the first login once, with a real TTY attached, before bringing the stack up normally:
+
+```bash
+docker compose run --rm -it mirror python main.py
+```
+
+Answer the phone/OTP/2FA prompts. Once it logs in and moves on to historical sync (you'll see sync progress in the logs), `Ctrl+C` — the session is already saved to `./session_data/mirror_bot.session` on the host at that point. Then start everything normally:
+
+```bash
+docker compose up -d
+```
+
+Subsequent restarts/rebuilds reuse the saved session and never prompt.
+
+If you already have a session file from a non-Docker run (step 5), reuse it instead of logging in again:
+
+```bash
+mkdir -p session_data
+mv mirror_bot.session* session_data/
+```
+
 ---
 
 ## Architecture
@@ -198,7 +223,7 @@ All live events are pushed onto an `asyncio.Queue`. A single consumer coroutine 
 |---|---|---|---|
 | `API_ID` | ✅ | — | Telegram API ID |
 | `API_HASH` | ✅ | — | Telegram API hash |
-| `SESSION_NAME` | ❌ | `mirror_bot` | Session file name |
+| `SESSION_NAME` | ❌ | `mirror_bot` | Session file name (overridden to `session_data/mirror_bot` in `docker-compose.yml` so the session persists via the mounted volume) |
 | `SOURCE_CHANNEL` | ✅ | — | Numeric source channel ID |
 | `DESTINATION_CHANNEL` | ✅ | — | Numeric destination channel ID |
 | `ENABLE_DELETE_SYNC` | ❌ | `false` | Hard-delete mirrored messages when source deletes |

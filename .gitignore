@@ -15,6 +15,7 @@ ENV/
 # Telethon session files
 *.session
 *.session-journal
+session_data/
 
 # SQLite state
 *.db

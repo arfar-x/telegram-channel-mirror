@@ -46,6 +46,11 @@ uv pip install -r requirements.txt
 uv run python main.py
 
 # Docker (docker-compose.yml also starts a postgres:16-alpine service)
+# `mirror` runs detached with no TTY, so it can't answer login prompts — do the
+# first login interactively once (writes the session into the ./session_data
+# bind mount, per SESSION_NAME=session_data/mirror_bot set in the compose file)
+# before bringing the stack up normally:
+docker compose run --rm -it mirror python main.py   # Ctrl+C once past login
 docker compose up -d
 
 # One-off scripts (all under scripts/, run with `uv run python scripts/<name>.py`)
@@ -64,7 +69,7 @@ Everything comes from environment variables (`.env` loaded via `python-dotenv`).
 | Variable | Required | Default | Notes |
 | --- | --- | --- | --- |
 | `API_ID` / `API_HASH` | yes | — | from [my.telegram.org/apps](https://my.telegram.org/apps) |
-| `SESSION_NAME` | no | `mirror_bot` | Telethon session file prefix |
+| `SESSION_NAME` | no | `mirror_bot` | Telethon session file prefix; overridden to `session_data/mirror_bot` in `docker-compose.yml` so the session persists via the `./session_data` bind mount across container restarts/rebuilds |
 | `SOURCE_CHANNEL` / `DESTINATION_CHANNEL` | yes | — | numeric ids, include the `-100` prefix |
 | `DATABASE_URL` | no | `postgresql://postgres:postgres@localhost:5432/mirror` | read directly in `db/database.py`, not part of `Config` |
 | `ENABLE_DELETE_SYNC` | no | `false` | see "Soft vs hard delete" below |
@@ -141,4 +146,3 @@ Because `main.py` only ever mirrors/writes ids strictly above `recovery_boundary
 
 - `pyproject.toml` declares `dependencies = []`; real dependencies live in `requirements.txt`. Running `uv sync` will *uninstall* everything — use `uv pip install -r requirements.txt`.
 - Python version is inconsistent across files: `pyproject.toml` requires `>=3.11`, `README.md` says "3.12+", and `Dockerfile` uses `python:3.11-slim`.
-- `docker-compose.yml` sets `command: uv run main.py` for the `mirror` service, but `Dockerfile`'s `ENTRYPOINT` is `["python", "/app/main.py"]` and never installs `uv` — these combine oddly and haven't been verified to work together end-to-end.

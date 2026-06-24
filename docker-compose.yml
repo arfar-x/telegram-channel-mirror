@@ -22,6 +22,10 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    environment:
+      - SESSION_NAME=session_data/mirror_bot
+    volumes:
+      - ./session_data:/app/session_data
     stdin_open: true
     tty: true
 
