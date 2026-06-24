@@ -23,3 +23,6 @@ ENV/
 
 # Transient media downloads
 temp_media/
+
+# rclone Google Drive credentials
+rclone.conf

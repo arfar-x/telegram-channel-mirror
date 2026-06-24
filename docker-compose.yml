@@ -23,5 +23,19 @@ services:
     stdin_open: true
     tty: true
 
+  backup:
+    build:
+      context: .
+      dockerfile: docker/backup.Dockerfile
+    restart: always
+    depends_on:
+      - postgres
+    env_file:
+      - .env
+    volumes:
+      - mirror_backups:/backups
+      - ./rclone.conf:/root/.config/rclone/rclone.conf:ro
+
 volumes:
   mirror_pgdata:
+  mirror_backups:

@@ -24,6 +24,9 @@ scripts/get_message.py            fetch one source message by id (debugging)
 scripts/get_profile_id.py         list numeric ids of all your dialogs/channels
 scripts/migrate_sqlite_to_postgres.py   one-time legacy SQLite -> Postgres migration
 scripts/recover_message_map.py    disaster recovery — rebuild message_map after DB loss, see below
+scripts/backup_postgres.sh        pg_dump -> gzip -> rclone upload -> prune by BACKUP_RETENTION_DAYS
+docker/backup.Dockerfile          image for the `backup` compose service (postgres-client + rclone + crond)
+docker/backup-entrypoint.sh       writes container env to /etc/backup.env, renders crontab from BACKUP_CRON_SCHEDULE, execs crond
 docs/LIMITATIONS.md               Telegram API limitations and how each is handled
 ```
 

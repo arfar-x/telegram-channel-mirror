@@ -223,6 +223,37 @@ All live events are pushed onto an `asyncio.Queue`. A single consumer coroutine 
 
 ---
 
+## Automated Postgres backups (Google Drive)
+
+`docker compose up -d` also starts a `backup` service (built from [docker/backup.Dockerfile](docker/backup.Dockerfile)) that runs [scripts/backup_postgres.sh](scripts/backup_postgres.sh) on a daily cron schedule inside the container. Each run:
+
+1. `pg_dump`s the database (custom format, gzip-compressed) into a named volume (`mirror_backups`)
+2. Uploads the dump to a Google Drive folder via [rclone](https://rclone.org/) — a single CLI that speaks the Google Drive API (and S3, Dropbox, etc.) so we don't have to handle OAuth/API calls ourselves
+3. Deletes local and remote dump files older than `BACKUP_RETENTION_DAYS` (default 7)
+
+### One-time setup
+
+1. Install rclone on your host (or anywhere with a browser) and authorize Google Drive:
+   ```bash
+   rclone config
+   # n) New remote -> name it "gdrive" -> type "drive" -> follow the OAuth browser flow
+   ```
+   This writes `~/.config/rclone/rclone.conf`. Copy that file into the repo root as `rclone.conf` — it's mounted read-only into the `backup` container at `/root/.config/rclone/rclone.conf` (gitignored; treat it like a credential).
+2. In `.env`, set `RCLONE_REMOTE=gdrive:<folder-name>` (the folder is created automatically on first upload), and optionally `BACKUP_RETENTION_DAYS` / `BACKUP_CRON_SCHEDULE` (5-field cron expression, default `0 3 * * *`).
+3. `docker compose up -d --build backup`
+
+### Manual run / restore
+
+```bash
+# Trigger an out-of-schedule backup
+docker compose exec backup /usr/local/bin/backup_postgres.sh
+
+# Restore a dump (downloaded via `rclone copy` or already in the mirror_backups volume)
+gunzip -c mirror_20260624_030000.dump.gz | pg_restore --dbname="$DATABASE_URL" --clean
+```
+
+---
+
 ## Limitations
 
 See [LIMITATIONS.md](LIMITATIONS.md) for a full list of Telegram API limitations and their handling.
