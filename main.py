@@ -26,7 +26,7 @@ from telethon import TelegramClient
 
 from db import Database
 from handlers import EventDispatcher, HistoricalSync, MessageSender
-from utils import load_config, setup_logging, MediaHandler
+from utils import MediaHandler, load_config, setup_logging
 from utils.retry import ShutdownRequested, set_shutdown_event
 
 logger = logging.getLogger(__name__)

@@ -12,21 +12,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import mimetypes
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from telethon import TelegramClient
 from telethon.tl.types import (
     DocumentAttributeAnimated,
+    DocumentAttributeAudio,
+    DocumentAttributeSticker,
+    DocumentAttributeVideo,
     Message,
     MessageMediaDocument,
     MessageMediaPhoto,
-    DocumentAttributeAudio,
-    DocumentAttributeFilename,
-    DocumentAttributeSticker,
-    DocumentAttributeVideo,
 )
 
 from utils.retry import MediaDownloadError

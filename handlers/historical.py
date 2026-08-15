@@ -59,10 +59,7 @@ running independently in the meantime (see EventDispatcher).
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
-from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from telethon.tl.types import InputMessagesFilterPinned
@@ -71,6 +68,7 @@ from utils.retry import ShutdownRequested, is_shutdown_requested
 
 if TYPE_CHECKING:
     from telethon import TelegramClient
+
     from db import Database
     from handlers.sender import MessageSender
     from utils.config import Config

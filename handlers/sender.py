@@ -26,31 +26,17 @@ import time
 from typing import Sequence
 
 from telethon import TelegramClient
-from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.functions.messages import (
-    EditMessageRequest,
     SendMediaRequest,
-    SendMultiMediaRequest,
     UpdatePinnedMessageRequest,
 )
 from telethon.tl.types import (
     InputMediaPoll,
-    InputMediaUploadedDocument,
-    InputMediaUploadedPhoto,
     InputReplyToMessage,
-    InputSingleMedia,
     Message,
-    MessageEntityCustomEmoji,
-    MessageMediaDocument,
-    MessageMediaPhoto,
     MessageMediaPoll,
     Poll,
     PollAnswer,
-    DocumentAttributeAudio,
-    DocumentAttributeFilename,
-    DocumentAttributeSticker,
-    DocumentAttributeVideo,
-    DocumentAttributeImageSize,
 )
 
 from db import Database

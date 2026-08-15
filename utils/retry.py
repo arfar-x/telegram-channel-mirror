@@ -13,7 +13,6 @@ from telethon.errors import (
     FloodWaitError,
     ServerError,
     TimedOutError,
-    BadRequestError,
 )
 
 logger = logging.getLogger(__name__)

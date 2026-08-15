@@ -19,25 +19,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from telethon import events
 from telethon.tl.types import (
-    MessageActionChannelMigrateFrom,
     MessageActionChatEditPhoto,
     MessageActionChatEditTitle,
     MessageActionPinMessage,
-    UpdateChannel,
 )
 
-from utils.retry import ShutdownRequested, is_shutdown_requested, sleep_or_abort
+from utils.retry import ShutdownRequested, sleep_or_abort
 
 if TYPE_CHECKING:
     from telethon import TelegramClient
-    from utils.config import Config
+
     from db import Database
     from handlers.sender import MessageSender
+    from utils.config import Config
 
 logger = logging.getLogger(__name__)
 
