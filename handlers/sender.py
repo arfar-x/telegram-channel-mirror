@@ -171,12 +171,16 @@ class MessageSender:
             )
             return
         try:
-            await self._client(
-                UpdatePinnedMessageRequest(peer=self._dest, id=dest_id)
-            )
+            await self._do_pin(dest_id)
             logger.info("Pinned dest_id=%d (source_id=%d)", dest_id, source_id)
         except Exception as exc:
             logger.warning("Could not pin dest_id=%d: %s", dest_id, exc)
+
+    @with_retry()
+    async def _do_pin(self, dest_id: int) -> None:
+        await self._client(
+            UpdatePinnedMessageRequest(peer=self._dest, id=dest_id)
+        )
 
     # ------------------------------------------------------------------
     # Dispatch
