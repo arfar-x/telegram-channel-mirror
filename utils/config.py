@@ -44,6 +44,7 @@ class Config:
     enable_delete_sync: bool = False
     max_concurrent_downloads: int = 3
     historical_send_delay: float = 0.5
+    pin_sync_delay: float = 3.0
     temp_media_dir: Path = field(default_factory=lambda: Path("temp_media"))
     log_level: str = "INFO"
 
@@ -61,6 +62,7 @@ def load_config() -> Config:
         enable_delete_sync=_bool_env("ENABLE_DELETE_SYNC", False),
         max_concurrent_downloads=_int_env("MAX_CONCURRENT_DOWNLOADS", 3),
         historical_send_delay=_float_env("HISTORICAL_SEND_DELAY", 0.5),
+        pin_sync_delay=_float_env("PIN_SYNC_DELAY", 3.0),
         temp_media_dir=temp_dir,
         log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     )

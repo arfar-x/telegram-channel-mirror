@@ -102,7 +102,17 @@
 
 ---
 
-## 15. Self-Referential Link Rewriting
+## 15. Pin Flood-Wait Escalation
+
+**Issue:** Telegram's flood control on `messages.updatePinnedMessage` escalates far more aggressively than it does for regular sends. A handful of pin calls fired back-to-back can go from single-digit-second waits to waits of many minutes (observed: 6s, 6s, 6s, then 884s by the 11th call in a row) — even when most of those calls are no-ops re-pinning an already-pinned destination message, since the flood limit appears to be keyed on the API call itself, not on whether it changed anything.
+
+**Behaviour:** `HistoricalSync._sync_pinned_messages()` paces pin calls `PIN_SYNC_DELAY` seconds apart (default 3s) specifically to avoid tripping this escalation. `with_retry()` still sleeps out any `FloodWaitError` it does hit (retried without limit — see #14), so a pin sync is never abandoned, but without pacing, a channel with many pins could stall on one giant wait for a long time, and — since `_sync_pinned_messages` has no resumption cursor of its own and starts over from the first pinned message on every run — a daemon restart during that wait means the next run re-attempts (as no-ops) every pin already applied before hitting the escalation again.
+
+**Workaround:** Increase `PIN_SYNC_DELAY` if you still see large flood waits with many pinned messages, and avoid restarting the daemon mid-pin-sync (check the logs for "Syncing N pinned message(s)") since progress within that pass isn't persisted until it finishes.
+
+---
+
+## 16. Self-Referential Link Rewriting
 
 **Issue:** A source post can link to another post in the same channel (e.g. "see t.me/c/&lt;source&gt;/1234"). Mirrored verbatim, the link is wrong twice over: the message id means nothing in the destination's own numbering, and the source channel is usually private, so a destination-only reader can't open it at all.
 
