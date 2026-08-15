@@ -34,7 +34,10 @@ finishes (once it isn't stopping early for shutdown) with a pass that lists
 the source channel's *current* pinned messages and pins their mirrored
 counterparts in the destination. This is cheap and idempotent, so it doubles
 as self-healing for a live pin event that arrived before its target message
-had been mirrored yet.
+had been mirrored yet. Pin calls are paced by PIN_SYNC_DELAY seconds apart —
+Telegram escalates flood-wait much faster for rapid pin calls than for
+regular sends, so an unpaced loop over many pins can stall for a very long
+time partway through (see config.pin_sync_delay).
 
 Pending edits
 --------------
@@ -64,7 +67,7 @@ from typing import TYPE_CHECKING
 
 from telethon.tl.types import InputMessagesFilterPinned
 
-from utils.retry import ShutdownRequested, is_shutdown_requested
+from utils.retry import ShutdownRequested, is_shutdown_requested, sleep_or_abort
 
 if TYPE_CHECKING:
     from telethon import TelegramClient
@@ -209,6 +212,12 @@ class HistoricalSync:
         pinning one message doesn't stop the rest from being attempted —
         failures are collected and raised together at the end so the whole
         pass gets retried without one bad pin blocking its siblings.
+
+        Paced by config.pin_sync_delay between pin calls: Telegram's flood
+        control on UpdatePinnedMessageRequest escalates fast for back-to-back
+        calls (seconds-long waits balloon into many-minutes-long ones after
+        only a handful of pins), which without pacing can leave a channel
+        with dozens of pins stuck partway through for a long time.
         """
         pinned_source_ids = sorted(
             [
@@ -246,6 +255,13 @@ class HistoricalSync:
             except Exception as exc:
                 logger.error("Failed to pin source_id=%d: %s", source_id, exc, exc_info=True)
                 failures.append(source_id)
+
+            # Telegram escalates its flood-wait aggressively for back-to-back
+            # UpdatePinnedMessageRequest calls (far more so than for regular
+            # sends) — pacing these out, like historical_send_delay already
+            # does for message sends, avoids tripping it in the first place.
+            if source_id != pinned_source_ids[-1]:
+                await sleep_or_abort(self._cfg.pin_sync_delay)
 
         if failures:
             raise RuntimeError(f"Failed to pin {len(failures)} message(s): {failures}")

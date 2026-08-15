@@ -229,6 +229,7 @@ All live events are pushed onto an `asyncio.Queue`. A single consumer coroutine 
 | `ENABLE_DELETE_SYNC` | ❌ | `false` | Hard-delete mirrored messages when source deletes |
 | `MAX_CONCURRENT_DOWNLOADS` | ❌ | `3` | Parallel media downloads |
 | `HISTORICAL_SEND_DELAY` | ❌ | `0.5` | Seconds between sends during historical sync |
+| `PIN_SYNC_DELAY` | ❌ | `3.0` | Seconds between pin calls when syncing pinned messages (Telegram flood-waits rapid pin calls much more aggressively than sends) |
 | `TEMP_MEDIA_DIR` | ❌ | `temp_media` | Temp directory for downloaded media |
 | `LOG_LEVEL` | ❌ | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
