@@ -20,8 +20,19 @@ logger = logging.getLogger(__name__)
 
 F = TypeVar("F")
 
+
+class MediaDownloadError(Exception):
+    """
+    Raised when Telegram gives us media that should have a downloadable file
+    (a photo or document) but download_media() returns nothing for it. This
+    is treated as a transient failure like ServerError/TimedOutError — it is
+    NOT raised for message kinds that legitimately have no file to download
+    (contacts, geo, dice, a bare webpage preview, ...); see MediaHandler.download().
+    """
+
+
 # Errors that are safe to retry
-_RETRYABLE = (FloodWaitError, ServerError, TimedOutError)
+_RETRYABLE = (FloodWaitError, ServerError, TimedOutError, MediaDownloadError)
 
 # Set once from main() so retry waits can be interrupted on shutdown without
 # being mistaken for a real send failure (see ShutdownRequested below).
@@ -48,7 +59,7 @@ class ShutdownRequested(BaseException):
     """
 
 
-async def _sleep_or_abort(seconds: float) -> None:
+async def sleep_or_abort(seconds: float) -> None:
     """Sleep, but wake up early and raise ShutdownRequested if shutdown fires."""
     if _shutdown_event is None:
         await asyncio.sleep(seconds)
@@ -88,11 +99,19 @@ def with_retry(
                         attempt + 1,
                         max_attempts,
                     )
-                    await _sleep_or_abort(wait)
-                except (ServerError, TimedOutError) as exc:
+                    await sleep_or_abort(wait)
+                except (ServerError, TimedOutError, MediaDownloadError) as exc:
                     attempt += 1
                     if attempt >= max_attempts:
-                        logger.error("Max retries reached: %s", exc)
+                        # Not given up on for good — the caller (HistoricalSync /
+                        # EventDispatcher) retries indefinitely with its own
+                        # backoff rather than ever marking the item permanently
+                        # failed. This cap just avoids busy-looping tightly in
+                        # here before handing off to that slower outer retry.
+                        logger.error(
+                            "Giving up after %d quick retries (%s); the caller "
+                            "will keep retrying.", max_attempts, exc,
+                        )
                         raise
                     logger.warning(
                         "Transient error (%s), retry %d/%d in %.1fs",
@@ -101,7 +120,7 @@ def with_retry(
                         max_attempts,
                         delay,
                     )
-                    await _sleep_or_abort(delay)
+                    await sleep_or_abort(delay)
                     delay = min(delay * 2, max_delay)
 
         return wrapper

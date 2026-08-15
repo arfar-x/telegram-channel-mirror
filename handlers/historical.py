@@ -35,6 +35,26 @@ the source channel's *current* pinned messages and pins their mirrored
 counterparts in the destination. This is cheap and idempotent, so it doubles
 as self-healing for a live pin event that arrived before its target message
 had been mirrored yet.
+
+Pending edits
+--------------
+An edit arriving for a source_id not yet mirrored (a race during backfill)
+is queued in the pending_edits table by MessageSender.edit_message() rather
+than dropped. Every run() replays anything still queued there once its
+target has since been mirrored (see _sync_pending_edits below), instead of
+leaving it stuck forever.
+
+Exactly-once / never-skip
+---------------------------
+Nothing in this module ever marks a message, pin, or edit permanently
+"done" on failure. A genuine failure (flood wait, transient Telegram/network
+error, ...) propagates out of run() so main.py's outer retry loop calls
+run() again with backoff — forever, until it succeeds — rather than the
+item being silently skipped. The trade-off: since messages are mirrored
+strictly oldest -> newest, a message that can genuinely never succeed (not
+just rate-limited, but permanently undeliverable) blocks everything behind
+it in the historical backlog until someone investigates; live sync keeps
+running independently in the meantime (see EventDispatcher).
 """
 
 from __future__ import annotations
@@ -47,7 +67,7 @@ from typing import TYPE_CHECKING
 
 from telethon.tl.types import InputMessagesFilterPinned
 
-from utils.retry import is_shutdown_requested
+from utils.retry import ShutdownRequested, is_shutdown_requested
 
 if TYPE_CHECKING:
     from telethon import TelegramClient
@@ -143,9 +163,31 @@ class HistoricalSync:
 
         if stopped_early:
             logger.info("Historical sync paused. Messages processed this run: %d", total)
-        else:
-            logger.info("Historical sync complete. Total messages processed: %d", total)
-            await self._sync_pinned_messages()
+            return
+
+        logger.info("Historical sync complete. Total messages processed: %d", total)
+
+        # Both passes always run, independently of one another, so a failure
+        # in one never blocks the other from being attempted this pass. If
+        # either reports failures, we raise at the end so main.py's outer
+        # retry loop calls run() again — nothing here is ever given up on.
+        failed_passes: list[str] = []
+        for label, pass_fn in (
+            ("pin sync", self._sync_pinned_messages),
+            ("pending-edit replay", self._sync_pending_edits),
+        ):
+            try:
+                await pass_fn()
+            except ShutdownRequested:
+                raise
+            except Exception as exc:
+                logger.error("%s failed this pass: %s", label, exc, exc_info=True)
+                failed_passes.append(label)
+        if failed_passes:
+            raise RuntimeError(
+                f"{', '.join(failed_passes)} had unresolved failures this "
+                "pass; will retry."
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -165,7 +207,10 @@ class HistoricalSync:
 
         Safe to run every startup: pinning an already-pinned destination
         message is a no-op, and messages not yet mirrored are simply
-        skipped (and picked up on a later run once they are).
+        skipped (and picked up on a later run once they are). A failure
+        pinning one message doesn't stop the rest from being attempted —
+        failures are collected and raised together at the end so the whole
+        pass gets retried without one bad pin blocking its siblings.
         """
         pinned_source_ids = sorted(
             [
@@ -179,6 +224,7 @@ class HistoricalSync:
             return
 
         logger.info("Syncing %d pinned message(s) to destination.", len(pinned_source_ids))
+        failures: list[int] = []
         for source_id in pinned_source_ids:
             if is_shutdown_requested():
                 logger.info(
@@ -195,7 +241,68 @@ class HistoricalSync:
                 )
                 continue
 
-            await self._sender.pin_message(source_id)
+            try:
+                await self._sender.pin_message(source_id)
+            except ShutdownRequested:
+                raise
+            except Exception as exc:
+                logger.error("Failed to pin source_id=%d: %s", source_id, exc, exc_info=True)
+                failures.append(source_id)
+
+        if failures:
+            raise RuntimeError(f"Failed to pin {len(failures)} message(s): {failures}")
+
+    async def _sync_pending_edits(self) -> None:
+        """
+        Replay edits queued in pending_edits (MessageSender.edit_message()
+        queues an edit there when it arrives before its target has been
+        mirrored). Once the target is mirrored, refetch its current state
+        from the source and apply the edit — this is what actually
+        implements the replay the pending_edits table exists for.
+
+        Same continue-on-failure-then-raise pattern as _sync_pinned_messages:
+        one stuck edit doesn't block the rest from being retried this pass.
+        """
+        pending_ids = await self._db.get_pending_edit_ids()
+        if not pending_ids:
+            return
+
+        failures: list[int] = []
+        for source_id in pending_ids:
+            if is_shutdown_requested():
+                logger.info(
+                    "Shutdown requested — stopping pending-edit replay; "
+                    "will resume next run."
+                )
+                return
+
+            if not await self._db.is_processed(source_id):
+                continue  # target still not mirrored; keep waiting
+
+            try:
+                fresh = await self._client.get_messages(
+                    self._cfg.source_channel, ids=source_id
+                )
+                if fresh is None:
+                    # Source message is gone — nothing left to replay.
+                    await self._db.remove_pending_edit(source_id)
+                    continue
+                await self._sender.edit_message(source_id, fresh)
+                await self._db.remove_pending_edit(source_id)
+                logger.info("Replayed queued edit for source_id=%d.", source_id)
+            except ShutdownRequested:
+                raise
+            except Exception as exc:
+                logger.error(
+                    "Failed to replay queued edit for source_id=%d: %s",
+                    source_id, exc, exc_info=True,
+                )
+                failures.append(source_id)
+
+        if failures:
+            raise RuntimeError(
+                f"Failed to replay {len(failures)} queued edit(s): {failures}"
+            )
 
     async def _flush_album(self, messages: list) -> None:
         """Send a buffered album group and advance cursor."""

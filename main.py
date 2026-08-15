@@ -80,6 +80,7 @@ async def main() -> None:
         client=client,
         db=db,
         media_handler=media_handler,
+        source_channel=cfg.source_channel,
         dest_channel=cfg.destination_channel,
     )
 

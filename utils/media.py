@@ -29,6 +29,8 @@ from telethon.tl.types import (
     DocumentAttributeVideo,
 )
 
+from utils.retry import MediaDownloadError
+
 if TYPE_CHECKING:
     pass
 
@@ -51,8 +53,20 @@ class MediaHandler:
     # ------------------------------------------------------------------
 
     async def download(self, message: Message) -> Path | None:
-        """Download message media to a temp file; return the path or None."""
+        """
+        Download message media to a temp file.
+
+        Returns None when there is genuinely nothing to download — no media
+        at all, or a media kind with no attached file (contact, geo, venue,
+        dice, game, a bare webpage preview, ...). Raises MediaDownloadError
+        when the media IS a photo/document (i.e. should have a file) but
+        Telegram returns none — that's a real failure, not a content
+        limitation, and callers must retry it rather than treat it as a
+        legitimate no-op.
+        """
         if not message.media:
+            return None
+        if not isinstance(message.media, (MessageMediaPhoto, MessageMediaDocument)):
             return None
 
         async with self._sem:
@@ -63,7 +77,10 @@ class MediaHandler:
             if path:
                 logger.debug("Downloaded media → %s", path)
                 return Path(path)
-            return None
+            raise MediaDownloadError(
+                f"download_media returned no file for source_id={message.id} "
+                f"(media={type(message.media).__name__})"
+            )
 
     @staticmethod
     def cleanup(path: Path | None) -> None:

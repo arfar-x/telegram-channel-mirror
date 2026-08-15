@@ -159,3 +159,10 @@ class Database:
         await self._pool.execute(
             "DELETE FROM pending_edits WHERE source_id = $1", source_id
         )
+
+    async def get_pending_edit_ids(self) -> list[int]:
+        """Source ids with an edit queued, oldest-queued first."""
+        rows = await self._pool.fetch(
+            "SELECT source_id FROM pending_edits ORDER BY queued_at"
+        )
+        return [r["source_id"] for r in rows]
