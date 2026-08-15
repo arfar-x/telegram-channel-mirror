@@ -26,34 +26,21 @@ import time
 from typing import Sequence
 
 from telethon import TelegramClient
-from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.functions.messages import (
-    EditMessageRequest,
     SendMediaRequest,
-    SendMultiMediaRequest,
     UpdatePinnedMessageRequest,
 )
 from telethon.tl.types import (
     InputMediaPoll,
-    InputMediaUploadedDocument,
-    InputMediaUploadedPhoto,
     InputReplyToMessage,
-    InputSingleMedia,
     Message,
-    MessageEntityCustomEmoji,
-    MessageMediaDocument,
-    MessageMediaPhoto,
     MessageMediaPoll,
     Poll,
     PollAnswer,
-    DocumentAttributeAudio,
-    DocumentAttributeFilename,
-    DocumentAttributeSticker,
-    DocumentAttributeVideo,
-    DocumentAttributeImageSize,
 )
 
 from db import Database
+from utils.links import rewrite_self_links
 from utils.media import MediaHandler
 from utils.retry import with_retry
 
@@ -66,12 +53,27 @@ class MessageSender:
         client: TelegramClient,
         db: Database,
         media_handler: MediaHandler,
+        source_channel: int,
         dest_channel: int,
     ) -> None:
         self._client = client
         self._db = db
         self._mh = media_handler
         self._dest = dest_channel
+        # Bare (no -100 prefix) ids, matching how t.me/c/<bare_id>/<msg_id>
+        # links encode a channel.
+        self._source_bare = abs(source_channel) % (10**12)
+        self._dest_bare = abs(dest_channel) % (10**12)
+
+    async def _rewrite_links(self, text, entities):
+        """Rewrite self-referential t.me/c/<source>/<id> links to the mirrored dest id."""
+        return await rewrite_self_links(
+            text,
+            entities,
+            source_bare_id=self._source_bare,
+            dest_bare_id=self._dest_bare,
+            resolve_dest_id=self._db.get_dest_id,
+        )
 
     # ------------------------------------------------------------------
     # Public entry points
@@ -79,8 +81,15 @@ class MessageSender:
 
     async def send_message(self, message: Message, *, delay: float = 0.0) -> int | None:
         """
-        Mirror a single message. Returns destination message id or None on failure.
-        Skips if already processed.
+        Mirror a single message. Returns the destination message id, or None
+        if the message is a legitimate no-op (a service message, or media
+        with no downloadable file and no text). Skips if already processed.
+
+        Exactly-once contract: a genuine failure (flood wait, transient
+        Telegram/network error, ...) is never swallowed into a permanent
+        "done, dest_id=None" row — it propagates so the caller (HistoricalSync
+        via main.py's retry loop, or EventDispatcher's consumer) retries the
+        whole call again later instead of silently skipping the message.
         """
         if await self._db.is_processed(message.id):
             logger.debug("Already processed source_id=%d, skipping.", message.id)
@@ -89,18 +98,7 @@ class MessageSender:
         if delay:
             await asyncio.sleep(delay)
 
-        try:
-            dest_id = await self._dispatch(message)
-        except Exception as exc:
-            logger.error("Failed to mirror message %d: %s", message.id, exc, exc_info=True)
-            # Store with dest_id=None so we don't retry indefinitely
-            await self._db.upsert_mapping(
-                source_id=message.id,
-                dest_id=None,
-                media_type=MediaHandler.media_type(message),
-                created_at=time.time(),
-            )
-            return None
+        dest_id = await self._dispatch(message)
 
         logger.info(
             "Mirrored source_id=%d → dest_id=%s  (type=%s)",
@@ -129,18 +127,19 @@ class MessageSender:
                 await self.send_message(msg)
 
     async def edit_message(self, source_id: int, new_message: Message) -> None:
-        """Apply an edit from source to the mirrored destination message."""
+        """
+        Apply an edit from source to the mirrored destination message.
+        Genuine failures propagate (see send_message's exactly-once contract
+        above) instead of being logged and dropped.
+        """
         dest_id = await self._db.get_dest_id(source_id)
         if not dest_id:
             logger.debug("Edit for unknown source_id=%d — queuing for later.", source_id)
             await self._db.add_pending_edit(source_id, time.time())
             return
 
-        try:
-            await self._apply_edit(dest_id, new_message)
-            logger.info("Edited dest_id=%d (source_id=%d)", dest_id, source_id)
-        except Exception as exc:
-            logger.error("Edit failed for dest_id=%d: %s", dest_id, exc, exc_info=True)
+        await self._apply_edit(dest_id, new_message)
+        logger.info("Edited dest_id=%d (source_id=%d)", dest_id, source_id)
 
     async def delete_message(self, source_id: int) -> None:
         """
@@ -151,32 +150,51 @@ class MessageSender:
         await self._db.mark_deleted(source_id)
 
     async def hard_delete_message(self, source_id: int) -> None:
-        """Hard-delete the mirrored destination message."""
+        """
+        Hard-delete the mirrored destination message. Genuine failures
+        propagate (see send_message's exactly-once contract above); the
+        db.mark_deleted() call is idempotent so a retried call is safe.
+        """
         dest_id = await self._db.get_dest_id(source_id)
         await self._db.mark_deleted(source_id)
         if not dest_id:
             return
-        try:
-            await self._client.delete_messages(self._dest, [dest_id])
-            logger.info("Deleted dest_id=%d (source_id=%d)", dest_id, source_id)
-        except Exception as exc:
-            logger.warning("Could not delete dest_id=%d: %s", dest_id, exc)
+        await self._do_hard_delete(dest_id)
+        logger.info("Deleted dest_id=%d (source_id=%d)", dest_id, source_id)
+
+    @with_retry()
+    async def _do_hard_delete(self, dest_id: int) -> None:
+        await self._client.delete_messages(self._dest, [dest_id])
 
     async def pin_message(self, source_id: int) -> None:
-        """Pin the mirrored message in the destination channel."""
+        """
+        Pin the mirrored message in the destination channel. Genuine
+        failures propagate (see send_message's exactly-once contract above);
+        pinning an already-pinned message is a harmless no-op, so a retried
+        call is always safe.
+
+        A live pin event can race ahead of the NewMessage event for its
+        target (both land on the same queue, but Telegram doesn't guarantee
+        delivery order across update types) — if there's no mapping yet,
+        raise so the caller retries with backoff instead of dropping the pin
+        for good. HistoricalSync._sync_pinned_messages() pre-checks the
+        mapping itself and never calls in here for an unmapped id, so this
+        path is only reached from the live queue.
+        """
         dest_id = await self._db.get_dest_id(source_id)
         if not dest_id:
-            logger.warning(
-                "Pin event for source_id=%d but no dest mapping found.", source_id
+            raise LookupError(
+                f"No dest mapping yet for source_id={source_id}; "
+                "its target hasn't been mirrored yet."
             )
-            return
-        try:
-            await self._client(
-                UpdatePinnedMessageRequest(peer=self._dest, id=dest_id)
-            )
-            logger.info("Pinned dest_id=%d (source_id=%d)", dest_id, source_id)
-        except Exception as exc:
-            logger.warning("Could not pin dest_id=%d: %s", dest_id, exc)
+        await self._do_pin(dest_id)
+        logger.info("Pinned dest_id=%d (source_id=%d)", dest_id, source_id)
+
+    @with_retry()
+    async def _do_pin(self, dest_id: int) -> None:
+        await self._client(
+            UpdatePinnedMessageRequest(peer=self._dest, id=dest_id)
+        )
 
     # ------------------------------------------------------------------
     # Dispatch
@@ -209,11 +227,12 @@ class MessageSender:
     @with_retry()
     async def _send_text(self, message: Message) -> int | None:
         reply_to = await self._resolve_reply(message)
+        text, entities = await self._rewrite_links(message.message, message.entities)
 
         sent = await self._client.send_message(
             entity=self._dest,
-            message=message.message or "",
-            formatting_entities=message.entities,
+            message=text or "",
+            formatting_entities=entities,
             reply_to=reply_to,
             link_preview=False,
         )
@@ -234,12 +253,27 @@ class MessageSender:
     async def _send_media(self, message: Message) -> int | None:
         path = await self._mh.download(message)
         if not path:
-            logger.warning("Could not download media for source_id=%d", message.id)
+            # No downloadable file (contact/geo/venue/dice/game, or a bare
+            # webpage preview) — not a failure, just nothing to re-upload.
+            # Fall back to text so a caption isn't lost; if there's neither
+            # a file nor text, there's nothing to mirror at all.
+            if message.text or message.message:
+                logger.info(
+                    "No downloadable file for source_id=%d (media=%s) — "
+                    "sending as text instead.",
+                    message.id, type(message.media).__name__,
+                )
+                return await self._send_text(message)
+            logger.warning(
+                "No downloadable file and no text for source_id=%d (media=%s) "
+                "— nothing to mirror; skipping.",
+                message.id, type(message.media).__name__,
+            )
             return None
 
         reply_to = await self._resolve_reply(message)
-        caption = message.message or ""
-        entities = message.entities
+        caption, entities = await self._rewrite_links(message.message, message.entities)
+        caption = caption or ""
 
         # Voice notes and video notes need special flags
         is_voice = MediaHandler.is_voice(message)
@@ -291,9 +325,9 @@ class MessageSender:
 
     @with_retry()
     async def _send_sticker(self, message: Message) -> int | None:
+        # message.sticker implies a MessageMediaDocument, so download() here
+        # always returns a Path or raises — never a legitimate None.
         path = await self._mh.download(message)
-        if not path:
-            return None
         reply_to = await self._resolve_reply(message)
         try:
             sent = await self._client.send_file(
@@ -337,8 +371,10 @@ class MessageSender:
             files = [p for _, p in paths]
             # Caption goes on first item only (Telegram album behaviour)
             first_msg = paths[0][0]
-            caption = first_msg.message or ""
-            entities = first_msg.entities
+            caption, entities = await self._rewrite_links(
+                first_msg.message, first_msg.entities
+            )
+            caption = caption or ""
 
             reply_to = await self._resolve_reply(first_msg)
 
@@ -424,20 +460,27 @@ class MessageSender:
 
     @with_retry()
     async def _apply_edit(self, dest_id: int, new_message: Message) -> None:
+        # Media edits only allow caption/text changes anyway (Telegram API
+        # restriction — see LIMITATIONS.md #2), so both branches send the
+        # same thing; kept separate to mirror the original media-vs-text
+        # distinction for readability.
+        text, entities = await self._rewrite_links(
+            new_message.message, new_message.entities
+        )
         if new_message.media and not isinstance(new_message.media, MessageMediaPoll):
             # Media edit — Telegram only allows caption edits, not media swap
             await self._client.edit_message(
                 entity=self._dest,
                 message=dest_id,
-                text=new_message.message or "",
-                formatting_entities=new_message.entities,
+                text=text or "",
+                formatting_entities=entities,
             )
         else:
             await self._client.edit_message(
                 entity=self._dest,
                 message=dest_id,
-                text=new_message.message or "",
-                formatting_entities=new_message.entities,
+                text=text or "",
+                formatting_entities=entities,
             )
 
     # ------------------------------------------------------------------

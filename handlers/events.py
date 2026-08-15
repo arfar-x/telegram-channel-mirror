@@ -19,25 +19,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from telethon import events
 from telethon.tl.types import (
-    MessageActionChannelMigrateFrom,
     MessageActionChatEditPhoto,
     MessageActionChatEditTitle,
     MessageActionPinMessage,
-    UpdateChannel,
 )
 
-from utils.retry import ShutdownRequested, is_shutdown_requested
+from utils.retry import ShutdownRequested, sleep_or_abort
 
 if TYPE_CHECKING:
     from telethon import TelegramClient
-    from utils.config import Config
+
     from db import Database
     from handlers.sender import MessageSender
+    from utils.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -145,24 +143,51 @@ class EventDispatcher:
                 self._queue.task_done()
                 break
             kind, payload = item
+            resolved = await self._handle_with_retry(kind, payload)
+            self._queue.task_done()
+            if not resolved:
+                # Shutdown requested mid-retry — stop the whole consumer
+                # rather than racing through the rest of the backlog.
+                break
+
+    async def _handle_with_retry(self, kind: str, payload) -> bool:
+        """
+        Retry a queue item until it succeeds or shutdown is requested —
+        exactly-once means a rate limit or a transient error must never
+        cause a live event to be silently dropped. Returns False only on
+        shutdown; True once _handle() succeeds.
+        """
+        delay = 1.0
+        while True:
             try:
                 await self._handle(kind, payload)
+                return True
             except ShutdownRequested:
                 # Mid-handle wait (e.g. a long FloodWait) was interrupted by
-                # shutdown. This item was never marked processed, so it will
-                # be picked up again by the next historical sync — stop here
-                # rather than racing through the rest of the backlog.
+                # shutdown. This item was never marked processed, so most
+                # kinds will be picked up again by the next historical sync
+                # (delete/pin live events are the exception — see
+                # LIMITATIONS.md). Stop here rather than racing through the
+                # rest of the backlog.
                 logger.info(
                     "Shutdown requested while handling [%s]; remaining queued "
                     "events will be retried on the next run.", kind,
                 )
-                self._queue.task_done()
-                break
+                return False
             except Exception as exc:
-                logger.error("Consumer error [%s]: %s", kind, exc, exc_info=True)
-                self._queue.task_done()
-            else:
-                self._queue.task_done()
+                logger.error(
+                    "Consumer error [%s]: %s — retrying in %.0fs",
+                    kind, exc, delay, exc_info=True,
+                )
+                try:
+                    await sleep_or_abort(delay)
+                except ShutdownRequested:
+                    logger.info(
+                        "Shutdown requested while backing off [%s]; remaining "
+                        "queued events will be retried on the next run.", kind,
+                    )
+                    return False
+                delay = min(delay * 2, 300.0)
 
     async def _handle(self, kind: str, payload) -> None:
         if kind == "new":

@@ -4,3 +4,21 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = []
+
+[tool.ruff]
+# Matches the longest lines already in the repo (mostly SQL/log strings) —
+# picked to avoid reformatting unrelated code as part of adding lint CI.
+line-length = 120
+
+[tool.ruff.lint]
+# Conservative, high-signal ruleset for a codebase with no prior linting:
+# pyflakes (F) + pycodestyle errors/warnings (E/W) + import sorting (I).
+# Deliberately skips stricter categories (docstrings, type-annotation
+# completeness, security linting) that would need a much larger pass to
+# adopt cleanly.
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# scripts/*.py deliberately call load_dotenv() before importing
+# telethon/db so environment variables are set before module-level reads.
+"scripts/*.py" = ["E402"]

@@ -79,3 +79,36 @@
 ## 12. Forwarding Attribution
 
 **Issue:** Since we never use `forward()`, all mirrored messages appear as if sent directly by your account. There is no "Forwarded from: [source]" header. This is intentional per the requirements.
+
+---
+
+## 13. Media With No Downloadable File
+
+**Issue:** Some media kinds have no attached file at all — a shared contact, a location/venue, a dice/game roll, or a plain webpage preview with no photo/document attached. `download_media()` correctly returns nothing for these; it isn't a failure.
+
+**Behaviour:** If the message has a caption, it's mirrored as a plain text message (the media itself is dropped). If there's neither a file nor any text, there's nothing to mirror and the message is skipped — same as a service message, permanently, since retrying can never produce a file that was never there.
+
+**Distinguishing from a real failure:** This is different from a photo/document that genuinely fails to download (network issue, expired file reference, ...) — that case *is* treated as a failure and retried indefinitely; see #14.
+
+---
+
+## 14. Exactly-Once / Never-Skip Retry Policy
+
+**Behaviour:** A genuine failure anywhere in the pipeline — a flood wait, a transient Telegram/network error, a photo/document that fails to download — is never swallowed into a permanent "processed, but failed" record. It's retried with backoff until it succeeds: `HistoricalSync` lets the failure propagate out of `run()`, and main.py's outer loop keeps calling `run()` again (backoff capped at 300s, forever); `EventDispatcher`'s live consumer retries a queued item the same way before moving to the next one.
+
+**Trade-off:** Because messages are mirrored strictly oldest → newest, a message that is *genuinely* undeliverable (not just rate-limited, but permanently broken — e.g. its file reference can never be resolved) will block every message behind it in the historical backlog until someone investigates and manually resolves it (e.g. via direct DB surgery to mark it done, or by fixing the underlying cause). Live sync keeps mirroring new messages independently in the meantime — it isn't blocked by a stuck historical backfill. Watch the logs (`Consumer error` / `Historical sync error`) for a message stuck retrying in a loop.
+
+**Live delete/pin events across a shutdown:** these have no cursor-based resumption path of their own (unlike new messages and edits, which a future historical pass will always re-discover). If the daemon shuts down mid-retry for one of these specific event kinds, that individual event is lost — consistent with #3's existing best-effort guarantee for deletes. Pins get an extra safety net: `HistoricalSync` re-derives the destination's pinned state from the source's *current* pinned list on every startup, so a missed pin is picked up on the next run even if the live event itself was lost.
+
+---
+
+## 15. Self-Referential Link Rewriting
+
+**Issue:** A source post can link to another post in the same channel (e.g. "see t.me/c/&lt;source&gt;/1234"). Mirrored verbatim, the link is wrong twice over: the message id means nothing in the destination's own numbering, and the source channel is usually private, so a destination-only reader can't open it at all.
+
+**Behaviour:** `utils/links.py` rewrites any `t.me/c/<source_channel>/<id>` link (with or without an `https://` prefix) found in message text or a hidden hyperlink's URL to point at the mirrored destination message instead. Links to any other channel/chat are left untouched.
+
+**Known edge cases:**
+- If the linked message hasn't been mirrored yet, the link is left as-is (same graceful-degrade precedent as reply-chains, #8) — it is *not* retried or fixed up later once the target is mirrored.
+- A forum-topic link suffix (`t.me/c/<id>/<msg>/<topic>`) is preserved verbatim as trailing text but the topic id itself isn't translated — this project doesn't mirror forum topics.
+- If a formatting entity (bold, italic, spoiler, ...) overlaps the exact span of a rewritten plain-text URL, that entity is dropped rather than risk emitting a misaligned one. The new URL still renders as a clickable link regardless (Telegram clients auto-link plain `http(s)://` text independently of explicit entities) — only the extra formatting on that exact span is lost.

@@ -55,7 +55,12 @@ from typing import AsyncIterator, Union
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from telethon import TelegramClient
-from telethon.tl.types import Message, MessageMediaPoll
+from telethon.tl.types import (
+    Message,
+    MessageMediaDocument,
+    MessageMediaPhoto,
+    MessageMediaPoll,
+)
 
 from db import Database
 from utils import load_config, setup_logging
@@ -81,7 +86,16 @@ def classify(message: Message) -> str | None:
     if message.sticker:
         return "sticker"
     if message.media:
-        return MediaHandler.media_type(message)
+        # Mirrors MessageSender._send_media's fallback exactly: media with
+        # no downloadable file (contact/geo/venue/dice/game, or a bare
+        # webpage preview) is sent as text if there's a caption, otherwise
+        # skipped like a service message — it never becomes its raw
+        # media_type() label in message_map.
+        if isinstance(message.media, (MessageMediaPhoto, MessageMediaDocument)):
+            return MediaHandler.media_type(message)
+        if message.text or message.message:
+            return "text"
+        return None
     if message.text or message.message:
         return "text"
     return None  # service message — _dispatch never produced a dest message for these
