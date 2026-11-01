@@ -26,6 +26,7 @@ import time
 from typing import Sequence
 
 from telethon import TelegramClient
+from telethon.errors import MessageNotModifiedError
 from telethon.tl.functions.messages import (
     SendMediaRequest,
     UpdatePinnedMessageRequest,
@@ -467,20 +468,23 @@ class MessageSender:
         text, entities = await self._rewrite_links(
             new_message.message, new_message.entities
         )
-        if new_message.media and not isinstance(new_message.media, MessageMediaPoll):
-            # Media edit — Telegram only allows caption edits, not media swap
+        # Both media captions and plain text are edited the same way: Telegram
+        # only allows caption/text changes on media, never a media swap.
+        try:
             await self._client.edit_message(
                 entity=self._dest,
                 message=dest_id,
                 text=text or "",
                 formatting_entities=entities,
             )
-        else:
-            await self._client.edit_message(
-                entity=self._dest,
-                message=dest_id,
-                text=text or "",
-                formatting_entities=entities,
+        except MessageNotModifiedError:
+            # The destination already has exactly this text/entities (e.g. the
+            # source edit only changed media, which can't be mirrored — see
+            # LIMITATIONS.md #2 — or the edit was already applied). The goal
+            # state is reached, so this is success, not a failure to retry.
+            logger.info(
+                "Edit for dest_id=%d is a no-op (content not modified) — nothing to do.",
+                dest_id,
             )
 
     # ------------------------------------------------------------------
